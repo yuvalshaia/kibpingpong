@@ -1,16 +1,16 @@
 KVERSION ?= $(shell uname -r)
-BUILD_DIR ?= /lib/modules/${KVERSION}/build
+KDIR ?= /lib/modules/${KVERSION}/build
 version ?= 1.0
 TAG ?= HEAD
 
 modules:
-	$(MAKE) -C $(BUILD_DIR) M=$(PWD) modules
+	$(MAKE) -C $(KDIR) M=$(PWD) modules
 
 modules_install:
-	$(MAKE) -C $(BUILD_DIR) M=$(PWD) modules_install
+	$(MAKE) -C $(KDIR) M=$(PWD) modules_install
 
 clean:
-	$(MAKE) -C $(BUILD_DIR) M=$(PWD) clean
+	$(MAKE) -C $(KDIR) M=$(PWD) clean
 	rm -rf buildrpm/*.tar.bz2 buildrpm/rpm
 
 archive:

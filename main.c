@@ -398,6 +398,7 @@ static void add_one(struct ib_device *device)
 	struct ib_cq *scq = 0, *rcq = 0;
 	struct ib_qp_init_attr qp_init_attr;
 	struct comm *comm;
+	struct ib_cq_init_attr cq_attr;
 
 	pr_info("Pingpong.add_one: %s\n", device->name);
 
@@ -416,8 +417,10 @@ static void add_one(struct ib_device *device)
 		return;
 
 	/* CQs */
-	scq = ib_create_cq(device, NULL, NULL, NULL, 4, 0);
-	rcq = ib_create_cq(device, NULL, NULL, NULL, 4, 0);
+	memset(&cq_attr, 0, sizeof(struct ib_cq_init_attr));
+	cq_attr.cqe = 4;
+	scq = ib_create_cq(device, NULL, NULL, NULL, &cq_attr);
+	rcq = ib_create_cq(device, NULL, NULL, NULL, &cq_attr);
 	if (!scq || !rcq) {
 		pr_err("Fail to create CQ\n");
 		goto free_pd;
@@ -433,7 +436,7 @@ static void add_one(struct ib_device *device)
 	qp_init_attr.cap.max_recv_sge = 1;
 	qp_init_attr.sq_sig_type = IB_SIGNAL_ALL_WR;
 	qp_init_attr.qp_type = qp_type;
-	qp_init_attr.create_flags = IB_QP_CREATE_USE_GFP_NOIO;
+	//qp_init_attr.create_flags = IB_QP_CREATE_USE_GFP_NOIO;
 	comm->qp = ib_create_qp(comm->pd, &qp_init_attr);
 	if (!comm->qp || IS_ERR(comm->qp)) {
 		pr_err("Fail to create QP\n");
@@ -525,7 +528,7 @@ static void clean_comm_entry(struct comm *comm)
 	comm->dev = NULL;
 }
 
-static void remove_one(struct ib_device *device)
+static void remove_one(struct ib_device *device, void *client_data)
 {
 	struct comm *comm = device->dma_device->driver_data;
 
