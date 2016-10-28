@@ -117,7 +117,7 @@ static int init_qp_state(struct ib_qp *qp, bool rts, int port, u16 dlid,
 	return 0;
 err:
 	if (rc)
-		pr_err("Fail to switch to QP state %x, rc=%d\n",
+		pr_err("Fail to switch to QP state %d, rc=%d\n",
 		       qp_attr.qp_state, rc);
 	return rc;
 }
@@ -381,7 +381,7 @@ static ssize_t recv(struct device *d, struct device_attribute *attr,
 		rc = init_qp_state(comm->qp, true, comm->sport, comm->dlid,
 				   comm->dqpn);
 		if (rc) {
-			pr_err("Fail to change QP state to send\n");
+			pr_err("Fail to change QP state to recv\n");
 			return rc;
 		}
 		comm->qp_initialized = true;
