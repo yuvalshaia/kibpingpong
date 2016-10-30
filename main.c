@@ -186,7 +186,7 @@ static void post_recv(struct comm *comm)
 
 	comm->recv_buf_dma_addr = ib_dma_map_single(comm->dev, comm->recv_buf,
 						    comm->buf_sz,
-						    DMA_TO_DEVICE);
+						    DMA_FROM_DEVICE);
 	if (ib_dma_mapping_error(comm->dev, comm->recv_buf_dma_addr)) {
 		pr_err("Fail to map to DMA address\n");
 		kfree(comm->recv_buf);
