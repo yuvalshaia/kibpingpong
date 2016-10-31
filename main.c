@@ -34,6 +34,17 @@ struct comm {
 int comm_idx = -1;
 struct comm comm_array[MAX_DEVS];
 
+static struct comm *find_comm_obj(struct device *d)
+{
+	int i;
+
+	for (i = 0; i <= comm_idx; i++)
+		if (comm_array[i].dev->dma_device == d)
+			return &comm_array[i];
+
+	return NULL;
+}
+
 static int init_qp_state(struct ib_qp *qp, bool rts, int port, u16 dlid,
 			 u32 dqpn)
 {
@@ -212,33 +223,48 @@ static void post_recv(struct comm *comm)
 static ssize_t show_buf_sz(struct device *d, struct device_attribute *attr,
 			   char *buf)
 {
-	struct comm *comm = d->driver_data;
+	struct comm *comm = find_comm_obj(d);
+
+	if (!comm)
+		return 0;
 
 	return sprintf(buf, "%d\n", comm->buf_sz);
 }
+
 static ssize_t store_buf_sz(struct device *d, struct device_attribute *attr,
 			    const char *buf, size_t count)
 {
-	struct comm *comm = d->driver_data;
+	struct comm *comm = find_comm_obj(d);
+
+	if (!comm)
+		return 0;
 
 	if (kstrtol(buf, 0, (long *)&comm->buf_sz))
 		pr_warn("Invalid format for buf_sz (%s)\n", buf);
 
 	return count;
 }
+
 static DEVICE_ATTR(buf_sz, S_IWUSR | S_IRUGO, show_buf_sz, store_buf_sz);
 
 static ssize_t show_sport(struct device *d, struct device_attribute *attr,
 			  char *buf)
 {
-	struct comm *comm = d->driver_data;
+	struct comm *comm = find_comm_obj(d);
+
+	if (!comm)
+		return 0;
 
 	return sprintf(buf, "%d\n", comm->sport);
 }
+
 static ssize_t store_sport(struct device *d, struct device_attribute *attr,
 			   const char *buf, size_t count)
 {
-	struct comm *comm = d->driver_data;
+	struct comm *comm = find_comm_obj(d);
+
+	if (!comm)
+		return 0;
 
 	if (kstrtol(buf, 0, (long *)&comm->sport))
 		pr_warn("Invalid format for sport (%s)\n", buf);
@@ -246,19 +272,26 @@ static ssize_t store_sport(struct device *d, struct device_attribute *attr,
 	comm->qp_initialized = false;
 	return count;
 }
+
 static DEVICE_ATTR(sport, S_IWUSR | S_IRUGO, show_sport, store_sport);
 
 static ssize_t show_dlid(struct device *d, struct device_attribute *attr,
 			 char *buf)
 {
-	struct comm *comm = d->driver_data;
+	struct comm *comm = find_comm_obj(d);
+
+	if (!comm)
+		return 0;
 
 	return sprintf(buf, "%ld\n", (long)comm->dlid);
 }
 static ssize_t store_dlid(struct device *d, struct device_attribute *attr,
 			  const char *buf, size_t count)
 {
-	struct comm *comm = d->driver_data;
+	struct comm *comm = find_comm_obj(d);
+
+	if (!comm)
+		return 0;
 
 	if (kstrtol(buf, 0, (long *)&comm->dlid))
 		pr_warn("Invalid format for dlid (%s)\n", buf);
@@ -266,25 +299,34 @@ static ssize_t store_dlid(struct device *d, struct device_attribute *attr,
 	comm->qp_initialized = false;
 	return count;
 }
+
 static DEVICE_ATTR(dlid, S_IWUSR | S_IRUGO, show_dlid, store_dlid);
 
 static ssize_t show_dqpn(struct device *d, struct device_attribute *attr,
 			 char *buf)
 {
-	struct comm *comm = d->driver_data;
+	struct comm *comm = find_comm_obj(d);
+
+	if (!comm)
+		return 0;
 
 	return sprintf(buf, "%d\n", comm->dqpn);
 }
+
 static ssize_t store_dqpn(struct device *d, struct device_attribute *attr,
 			  const char *buf, size_t count)
 {
-	struct comm *comm = d->driver_data;
+	struct comm *comm = find_comm_obj(d);
+
+	if (!comm)
+		return 0;
 
 	if (kstrtol(buf, 0, (long *)&comm->dqpn))
 		pr_warn("Invalid format for dqpn (%s)\n", buf);
 
 	return count;
 }
+
 static DEVICE_ATTR(dqpn, S_IWUSR | S_IRUGO, show_dqpn, store_dqpn);
 
 static int verify_comm_param(struct comm *comm)
@@ -312,8 +354,11 @@ static int verify_comm_param(struct comm *comm)
 static ssize_t send(struct device *d, struct device_attribute *attr,
 		    const char *buf, size_t count)
 {
-	struct comm *comm = d->driver_data;
 	int rc;
+	struct comm *comm = find_comm_obj(d);
+
+	if (!comm)
+		return 0;
 
 	rc = verify_comm_param(comm);
 	if (rc) {
@@ -335,18 +380,22 @@ static ssize_t send(struct device *d, struct device_attribute *attr,
 
 	return count;
 }
+
 static DEVICE_ATTR(send, S_IWUSR, NULL, send);
 
 static ssize_t show_recv_buf(struct device *d, struct device_attribute *attr,
 			     char *buf)
 {
-	struct comm *comm = d->driver_data;
 	int rc;
+	struct comm *comm = find_comm_obj(d);
 	struct ib_wc wc;
 	int poll_cq_times = 10000;
 
+	if (!comm)
+		return 0;
+
 	if (comm->recv_buf == NULL)
-		return -EPERM;
+		return 0;
 
 	rc = 0;
 	while (!rc && poll_cq_times--)
@@ -368,8 +417,11 @@ static ssize_t show_recv_buf(struct device *d, struct device_attribute *attr,
 static ssize_t recv(struct device *d, struct device_attribute *attr,
 		    const char *buf, size_t count)
 {
-	struct comm *comm = d->driver_data;
 	int rc;
+	struct comm *comm = find_comm_obj(d);
+
+	if (!comm)
+		return 0;
 
 	rc = verify_comm_param(comm);
 	if (rc) {
@@ -391,6 +443,7 @@ static ssize_t recv(struct device *d, struct device_attribute *attr,
 
 	return count;
 }
+
 static DEVICE_ATTR(recv, S_IWUSR | S_IRUGO, show_recv_buf, recv);
 
 static void add_one(struct ib_device *device)
@@ -408,8 +461,6 @@ static void add_one(struct ib_device *device)
 	memset(comm, 0, sizeof(struct comm));
 
 	comm->buf_sz = 1024;
-
-	device->dma_device->driver_data = comm;
 
 	/* PD */
 	comm->pd = ib_alloc_pd(device);
@@ -530,7 +581,7 @@ static void clean_comm_entry(struct comm *comm)
 
 static void remove_one(struct ib_device *device, void *client_data)
 {
-	struct comm *comm = device->dma_device->driver_data;
+	struct comm *comm = find_comm_obj(device->dma_device);
 
 	pr_info("Pingpong.remove_one: %s\n", device->name);
 
