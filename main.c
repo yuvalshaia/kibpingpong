@@ -554,7 +554,7 @@ static void init_comm_array(void)
 		memset(&comm_array[i], 0, sizeof(struct comm));
 }
 
-struct ib_client client = {
+static struct ib_client client = {
 	.name   = "pingpong",
 	.add    = add_one,
 	.remove = remove_one
