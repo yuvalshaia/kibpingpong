@@ -542,14 +542,12 @@ static void clean_hw_resources(struct comm *comm)
 
 	if (comm->mr)
 		ib_dereg_mr(comm->mr);
-
-	if (comm->qp) {
-		if (comm->qp->send_cq)
-			ib_destroy_cq(comm->qp->send_cq);
-		if (comm->qp->recv_cq)
-			ib_destroy_cq(comm->qp->recv_cq);
+	if (comm->qp)
 		ib_destroy_qp(comm->qp);
-	}
+	if (comm->qp->send_cq)
+		ib_destroy_cq(comm->qp->send_cq);
+	if (comm->qp->recv_cq)
+		ib_destroy_cq(comm->qp->recv_cq);
 	if (comm->pd)
 		ib_dealloc_pd(comm->pd);
 }
