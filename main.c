@@ -83,6 +83,7 @@ static int init_qp_state(struct ib_qp *qp, bool rts, int port, u16 dlid,
 	qp_attr_mask |= IB_QP_STATE;
 	qp_attr.qp_state = IB_QPS_RTR;
 	qp_attr_mask |= IB_QP_AV;
+	qp_attr.ah_attr.port_num = port;
 	qp_attr.ah_attr.sl = 0;
 	qp_attr.ah_attr.ah_flags = 0;
 	qp_attr.ah_attr.dlid = dlid;
