@@ -452,7 +452,6 @@ static void add_one(struct ib_device *device)
 	struct ib_cq *scq = 0, *rcq = 0;
 	struct ib_qp_init_attr qp_init_attr;
 	struct comm *comm;
-	struct ib_cq_init_attr cq_attr;
 
 	pr_info("Pingpong.add_one: %s\n", device->name);
 
@@ -469,10 +468,8 @@ static void add_one(struct ib_device *device)
 		return;
 
 	/* CQs */
-	memset(&cq_attr, 0, sizeof(struct ib_cq_init_attr));
-	cq_attr.cqe = 4;
-	scq = ib_create_cq(device, NULL, NULL, NULL, &cq_attr);
-	rcq = ib_create_cq(device, NULL, NULL, NULL, &cq_attr);
+	scq = ib_create_cq(device, NULL, NULL, NULL, 4, 0);
+	rcq = ib_create_cq(device, NULL, NULL, NULL, 4, 0);
 	if (!scq || !rcq) {
 		pr_err("Fail to create CQ\n");
 		goto free_pd;
