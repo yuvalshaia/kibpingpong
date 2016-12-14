@@ -195,6 +195,7 @@ static void post_recv(struct comm *comm)
 	int rc;
 
 	comm->recv_buf = (char *)kzalloc(comm->buf_sz, GFP_KERNEL);
+	strncpy(comm->recv_buf, "INIT_DATA", comm->buf_sz);
 
 	comm->recv_buf_dma_addr = ib_dma_map_single(comm->dev, comm->recv_buf,
 						    comm->buf_sz,
