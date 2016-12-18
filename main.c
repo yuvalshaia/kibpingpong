@@ -33,6 +33,7 @@ struct comm {
 
 int comm_idx = -1;
 struct comm comm_array[MAX_DEVS];
+int tx_ctx, rx_ctx;
 
 static struct comm *find_comm_obj(struct device *d)
 {
@@ -157,7 +158,8 @@ static void post_send(struct comm *comm, const char *buf)
 	sge.lkey = comm->mr->lkey;
 
 	wr.next = NULL;
-	wr.wr_id = (unsigned long)&comm->send_buf;
+	wr.wr_id = (unsigned long)comm->send_buf;
+	pr_info("send.wr_id = %ld\n", wr.wr_id);
 	wr.opcode = IB_WR_SEND;
 	wr.send_flags = IB_SEND_SIGNALED;
 	wr.sg_list = &sge;
@@ -167,16 +169,6 @@ static void post_send(struct comm *comm, const char *buf)
 	if (rc) {
 		pr_err("ib_post_send returned %d\n", rc);
 		goto out_dma_unmap;;
-	}
-
-	rc = 0;
-	while (!rc && poll_cq_times--)
-		rc = ib_poll_cq(comm->qp->send_cq, 1, &wc);
-	if (rc != 1)
-		pr_err("send ib_poll_cq returned %d\n", rc);
-	if (wc.status != IB_WC_SUCCESS) {
-		pr_err("wc.status=%d\n", wc.status);
-		pr_err("wc.vendor_err=0x%x\n", wc.vendor_err);
 	}
 
 out_dma_unmap:
@@ -210,7 +202,8 @@ static void post_recv(struct comm *comm)
 	sge.lkey = comm->mr->lkey;
 
 	wr.next = NULL;
-	wr.wr_id = (unsigned long)&comm->recv_buf;
+	wr.wr_id = (unsigned long)comm->recv_buf;
+	pr_info("recv.wr_id = %ld\n", wr.wr_id);
 	wr.sg_list = &sge;
 	wr.num_sge = 1;
 
@@ -390,7 +383,6 @@ static ssize_t show_recv_buf(struct device *d, struct device_attribute *attr,
 {
 	int rc;
 	struct comm *comm = find_comm_obj(d);
-	struct ib_wc wc;
 	int poll_cq_times = 10000;
 
 	if (!comm)
@@ -399,11 +391,6 @@ static ssize_t show_recv_buf(struct device *d, struct device_attribute *attr,
 	if (comm->recv_buf == NULL)
 		return 0;
 
-	rc = 0;
-	while (!rc && poll_cq_times--)
-		rc = ib_poll_cq(comm->qp->recv_cq, 1, &wc);
-	if (rc != 1)
-		pr_err("recv ib_poll_cq returned %d\n", rc);
 	ib_dma_unmap_single(comm->dev, comm->recv_buf_dma_addr, comm->buf_sz,
 			    DMA_TO_DEVICE);
 
@@ -448,6 +435,29 @@ static ssize_t recv(struct device *d, struct device_attribute *attr,
 
 static DEVICE_ATTR(recv, S_IWUSR | S_IRUGO, show_recv_buf, recv);
 
+void comp_handler(struct ib_cq *cq, void *cq_context)
+{
+	int n;
+	struct ib_wc wc;
+	char *payload;
+
+	pr_info("%s completion\n", cq_context == &rx_ctx ? "RX" : "TX");
+	do {
+		n = ib_poll_cq(cq, 1, &wc);
+		if (n == 1) {
+			pr_info("wc.status=%d\n", wc.status);
+			pr_info("wc.wr_id=%d\n", wc.wr_id);
+			payload = (char *)wc.wr_id;
+			pr_info("payload=%s\n", payload);
+			if (wc.status != IB_WC_SUCCESS)
+				pr_err("wc.vendor_err=0x%x\n", wc.vendor_err);
+		}
+		else if (n != 0) {
+			pr_info("Polled %d CQE\n", n);
+		}
+	} while (n);
+}
+
 static void add_one(struct ib_device *device)
 {
 	struct ib_cq *scq = 0, *rcq = 0;
@@ -472,8 +482,8 @@ static void add_one(struct ib_device *device)
 	/* CQs */
 	memset(&cq_attr, 0, sizeof(struct ib_cq_init_attr));
 	cq_attr.cqe = 4;
-	scq = ib_create_cq(device, NULL, NULL, NULL, &cq_attr);
-	rcq = ib_create_cq(device, NULL, NULL, NULL, &cq_attr);
+	scq = ib_create_cq(device, comp_handler, NULL, &tx_ctx, &cq_attr);
+	rcq = ib_create_cq(device, comp_handler, NULL, &rx_ctx, &cq_attr);
 	if (!scq || !rcq) {
 		pr_err("Fail to create CQ\n");
 		goto free_pd;
