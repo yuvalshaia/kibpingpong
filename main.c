@@ -14,6 +14,13 @@ MODULE_DESCRIPTION(DRIVER_DESC);
 int qp_type = IB_QPT_RC;
 module_param_named(qp_type, qp_type, int, 0444);
 MODULE_PARM_DESC(qp_type, "QP Type");
+int dev_idx = -1;
+module_param_named(dev_idx, dev_idx, int, 0444);
+MODULE_PARM_DESC(dev_idx, "Index of device to use for test");
+unsigned int cycles = 0;
+module_param_named(cycles, cycles, uint, 0444);
+MODULE_PARM_DESC(cycles, "Number of cycles to run");
+unsigned int sends_counter = 1;
 
 struct comm {
 	struct ib_device *dev;
@@ -135,16 +142,19 @@ err:
 	return rc;
 }
 
-static void post_send(struct comm *comm, const char *buf)
+static void post_send(struct comm *comm)
 {
 	struct ib_send_wr wr, *bad_wr;
 	struct ib_sge sge;
 	int rc;
 	struct ib_wc wc;
-	int poll_cq_times = 10000;
+
+	if (++sends_counter > cycles)
+		return;
+	pr_info("sends_counter=%d\n", sends_counter);
 
 	comm->send_buf = kzalloc(comm->buf_sz, GFP_KERNEL);
-	strncpy(comm->send_buf, buf, comm->buf_sz);
+	sprintf(comm->send_buf, "%d", sends_counter);
 
 	comm->send_buf_dma_addr = ib_dma_map_single(comm->dev, comm->send_buf,
 						    comm->buf_sz,
@@ -159,7 +169,7 @@ static void post_send(struct comm *comm, const char *buf)
 
 	wr.next = NULL;
 	wr.wr_id = (unsigned long)comm->send_buf;
-	pr_info("send.wr_id = %ld\n", wr.wr_id);
+	pr_info("send.wr_id=%d\n", wr.wr_id);
 	wr.opcode = IB_WR_SEND;
 	wr.send_flags = IB_SEND_SIGNALED;
 	wr.sg_list = &sge;
@@ -186,6 +196,12 @@ static void post_recv(struct comm *comm)
 	struct ib_sge sge;
 	int rc;
 
+	if (comm->recv_buf) {
+		ib_dma_unmap_single(comm->dev, comm->recv_buf_dma_addr,
+				    comm->buf_sz, DMA_TO_DEVICE);
+		kfree(comm->recv_buf);
+	}
+
 	comm->recv_buf = (char *)kzalloc(comm->buf_sz, GFP_KERNEL);
 	strncpy(comm->recv_buf, "INIT_DATA", comm->buf_sz);
 
@@ -203,7 +219,7 @@ static void post_recv(struct comm *comm)
 
 	wr.next = NULL;
 	wr.wr_id = (unsigned long)comm->recv_buf;
-	pr_info("recv.wr_id = %ld\n", wr.wr_id);
+	pr_info("recv.wr_id=%d\n", wr.wr_id);
 	wr.sg_list = &sge;
 	wr.num_sge = 1;
 
@@ -371,7 +387,12 @@ static ssize_t send(struct device *d, struct device_attribute *attr,
 		comm->qp_initialized = true;
 	}
 
-	post_send(comm, buf);
+	sends_counter = 0;
+
+	if (kstrtol(buf, 0, (long *)&cycles))
+		cycles = 1;
+
+	post_send(comm);
 
 	return count;
 }
@@ -383,7 +404,6 @@ static ssize_t show_recv_buf(struct device *d, struct device_attribute *attr,
 {
 	int rc;
 	struct comm *comm = find_comm_obj(d);
-	int poll_cq_times = 10000;
 
 	if (!comm)
 		return 0;
@@ -440,22 +460,29 @@ void comp_handler(struct ib_cq *cq, void *cq_context)
 	int n;
 	struct ib_wc wc;
 	char *payload;
+	struct comm *comm;
 
+	comm = &comm_array[*((int *)cq_context)];
 	pr_info("%s completion\n", cq_context == &rx_ctx ? "RX" : "TX");
 	do {
 		n = ib_poll_cq(cq, 1, &wc);
 		if (n == 1) {
 			pr_info("wc.status=%d\n", wc.status);
 			pr_info("wc.wr_id=%d\n", wc.wr_id);
-			payload = (char *)wc.wr_id;
-			pr_info("payload=%s\n", payload);
 			if (wc.status != IB_WC_SUCCESS)
 				pr_err("wc.vendor_err=0x%x\n", wc.vendor_err);
+			if (cq_context == &rx_ctx) {
+				payload = (char *)wc.wr_id;
+				pr_info("payload=%s\n", payload);
+				post_recv(comm);
+			} else {
+				post_send(comm);
+			}
 		}
 		else if (n != 0) {
 			pr_info("Polled %d CQE\n", n);
 		}
-	} while (n);
+	} while (n == 0);
 }
 
 static void add_one(struct ib_device *device)
@@ -482,6 +509,7 @@ static void add_one(struct ib_device *device)
 	/* CQs */
 	memset(&cq_attr, 0, sizeof(struct ib_cq_init_attr));
 	cq_attr.cqe = 4;
+	tx_ctx = rx_ctx = comm_idx;
 	scq = ib_create_cq(device, comp_handler, NULL, &tx_ctx, &cq_attr);
 	rcq = ib_create_cq(device, comp_handler, NULL, &rx_ctx, &cq_attr);
 	if (!scq || !rcq) {
@@ -527,6 +555,15 @@ static void add_one(struct ib_device *device)
 	}
 
 	comm->dev = device;
+
+	/* Should we run the test automatically? */
+	if (comm_idx == dev_idx) {
+		char buf[8];
+		snprintf(buf, 8, "%d", cycles);
+		recv(device->dma_device, NULL, "1", 1);
+		send(device->dma_device, NULL, buf, 1);
+	}
+
 	return;
 
 free_mr:
