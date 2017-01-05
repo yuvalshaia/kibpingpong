@@ -175,6 +175,10 @@ static void post_send(struct comm *comm)
 	wr.sg_list = &sge;
 	wr.num_sge = 1;
 
+	rc = ib_req_notify_cq(comm->qp->send_cq, IB_CQ_NEXT_COMP);
+	if (rc < 0)
+		pr_err("ib_req_notify_cq returned %d\n", rc);
+
 	rc = ib_post_send(comm->qp, &wr, &bad_wr);
 	if (rc) {
 		pr_err("ib_post_send returned %d\n", rc);
@@ -222,6 +226,10 @@ static void post_recv(struct comm *comm)
 	pr_info("recv.wr_id=%d\n", wr.wr_id);
 	wr.sg_list = &sge;
 	wr.num_sge = 1;
+
+	rc = ib_req_notify_cq(comm->qp->recv_cq, IB_CQ_NEXT_COMP);
+	if (rc < 0)
+		pr_err("ib_req_notify_cq returned %d\n", rc);
 
 	rc = ib_post_recv(comm->qp, &wr, &bad_wr);
 	if (rc) {
