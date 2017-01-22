@@ -17,10 +17,13 @@ MODULE_PARM_DESC(qp_type, "QP Type");
 int dev_idx = -1;
 module_param_named(dev_idx, dev_idx, int, 0444);
 MODULE_PARM_DESC(dev_idx, "Index of device to use for test");
-unsigned int cycles = 0;
-module_param_named(cycles, cycles, uint, 0444);
+unsigned long cycles = 0;
+module_param_named(cycles, cycles, ulong, 0444);
 MODULE_PARM_DESC(cycles, "Number of cycles to run");
-unsigned int sends_counter = 1;
+unsigned long sends_counter = 1;
+
+static struct workqueue_struct *wq;
+static void comp_processor(struct work_struct *work);
 
 struct comm {
 	struct ib_device *dev;
@@ -38,9 +41,14 @@ struct comm {
 	u64 recv_buf_dma_addr;
 };
 
+struct comp_work {
+	struct work_struct work;
+	struct comm *comm;
+	struct ib_cq *cq;
+};
+
 int comm_idx = -1;
 struct comm comm_array[MAX_DEVS];
-int tx_ctx, rx_ctx;
 
 static struct comm *find_comm_obj(struct device *d)
 {
@@ -147,14 +155,13 @@ static void post_send(struct comm *comm)
 	struct ib_send_wr wr, *bad_wr;
 	struct ib_sge sge;
 	int rc;
-	struct ib_wc wc;
 
 	if (++sends_counter > cycles)
 		return;
-	pr_info("sends_counter=%d\n", sends_counter);
+	pr_info("Sending %ld/%ld\n", sends_counter, cycles);
 
 	comm->send_buf = kzalloc(comm->buf_sz, GFP_KERNEL);
-	sprintf(comm->send_buf, "%d", sends_counter);
+	sprintf(comm->send_buf, "%ld", sends_counter);
 
 	comm->send_buf_dma_addr = ib_dma_map_single(comm->dev, comm->send_buf,
 						    comm->buf_sz,
@@ -169,7 +176,7 @@ static void post_send(struct comm *comm)
 
 	wr.next = NULL;
 	wr.wr_id = (unsigned long)comm->send_buf;
-	pr_info("send.wr_id=%d\n", wr.wr_id);
+	pr_info("send.wr_id=%lld\n", wr.wr_id);
 	wr.opcode = IB_WR_SEND;
 	wr.send_flags = IB_SEND_SIGNALED;
 	wr.sg_list = &sge;
@@ -182,8 +189,9 @@ static void post_send(struct comm *comm)
 	rc = ib_post_send(comm->qp, &wr, &bad_wr);
 	if (rc) {
 		pr_err("ib_post_send returned %d\n", rc);
-		goto out_dma_unmap;;
+		goto out_dma_unmap;
 	}
+	return;
 
 out_dma_unmap:
 	ib_dma_unmap_single(comm->dev, comm->send_buf_dma_addr, comm->buf_sz,
@@ -223,7 +231,7 @@ static void post_recv(struct comm *comm)
 
 	wr.next = NULL;
 	wr.wr_id = (unsigned long)comm->recv_buf;
-	pr_info("recv.wr_id=%d\n", wr.wr_id);
+	pr_info("recv.wr_id=%lld\n", wr.wr_id);
 	wr.sg_list = &sge;
 	wr.num_sge = 1;
 
@@ -463,34 +471,41 @@ static ssize_t recv(struct device *d, struct device_attribute *attr,
 
 static DEVICE_ATTR(recv, S_IWUSR | S_IRUGO, show_recv_buf, recv);
 
-void comp_handler(struct ib_cq *cq, void *cq_context)
+static void comp_processor(struct work_struct *work)
 {
-	int n;
 	struct ib_wc wc;
 	char *payload;
-	struct comm *comm;
+	struct comp_work *cwork =  container_of(work, struct comp_work, work);
+	struct comm *comm = cwork->comm;
+	struct ib_cq *cq = cwork->cq;
 
-	comm = &comm_array[*((int *)cq_context)];
-	pr_info("%s completion\n", cq_context == &rx_ctx ? "RX" : "TX");
-	do {
-		n = ib_poll_cq(cq, 1, &wc);
-		if (n == 1) {
-			pr_info("wc.status=%d\n", wc.status);
-			pr_info("wc.wr_id=%d\n", wc.wr_id);
-			if (wc.status != IB_WC_SUCCESS)
-				pr_err("wc.vendor_err=0x%x\n", wc.vendor_err);
-			if (cq_context == &rx_ctx) {
-				payload = (char *)wc.wr_id;
-				pr_info("payload=%s\n", payload);
-				post_recv(comm);
-			} else {
-				post_send(comm);
-			}
-		}
-		else if (n != 0) {
-			pr_info("Polled %d CQE\n", n);
-		}
-	} while (n == 0);
+	pr_info("%s completion\n", cq == cwork->comm->qp->recv_cq ? "RX" : "TX");
+
+	ib_poll_cq(cq, 1, &wc);
+	pr_info("wc.status=%d\n", wc.status);
+	pr_info("wc.wr_id=%lld\n", wc.wr_id);
+	if (wc.status != IB_WC_SUCCESS)
+		pr_err("wc.vendor_err=0x%x\n", wc.vendor_err);
+	if (cq == cwork->comm->qp->recv_cq) {
+		payload = (char *)wc.wr_id;
+		pr_info("payload=%s\n", payload);
+		post_recv(comm);
+	} else {
+		post_send(comm);
+	}
+
+	kfree(work);
+}
+
+void comp_handler(struct ib_cq *cq, void *cq_context)
+{
+	struct comp_work *work = kmalloc(sizeof *work, GFP_ATOMIC);
+
+	INIT_WORK(&work->work, comp_processor);
+	work->comm = (struct comm *)cq_context;
+	work->cq = cq;
+
+	queue_work(wq, &work->work);
 }
 
 static void add_one(struct ib_device *device)
@@ -517,9 +532,8 @@ static void add_one(struct ib_device *device)
 	/* CQs */
 	memset(&cq_attr, 0, sizeof(struct ib_cq_init_attr));
 	cq_attr.cqe = 4;
-	tx_ctx = rx_ctx = comm_idx;
-	scq = ib_create_cq(device, comp_handler, NULL, &tx_ctx, &cq_attr);
-	rcq = ib_create_cq(device, comp_handler, NULL, &rx_ctx, &cq_attr);
+	scq = ib_create_cq(device, comp_handler, NULL, comm, &cq_attr);
+	rcq = ib_create_cq(device, comp_handler, NULL, comm, &cq_attr);
 	if (!scq || !rcq) {
 		pr_err("Fail to create CQ\n");
 		goto free_pd;
@@ -566,8 +580,8 @@ static void add_one(struct ib_device *device)
 
 	/* Should we run the test automatically? */
 	if (comm_idx == dev_idx) {
-		char buf[8];
-		snprintf(buf, 8, "%d", cycles);
+		char buf[16];
+		snprintf(buf, sizeof(buf), "%ld", cycles);
 		recv(device->dma_device, NULL, "1", 1);
 		send(device->dma_device, NULL, buf, 1);
 	}
@@ -670,17 +684,27 @@ static int init_pingpong(void)
 {
 	int rc;
 
+	wq = alloc_workqueue("pingpong_comp", 0, 0);
+	if (!wq) {
+		pr_err("Fail to create completion WQ\n");
+		return -ENODEV;
+	}
+
 	init_comm_array();
 
 	rc = ib_register_client(&client);
-	if (rc) {
-		pr_err("Fail to register IB client\n");
-		return -ENODEV;
-	}
+	if (rc)
+		goto err_fail_reg_ib_client;
 
 	pr_info("Pingpong driver loaded successfully\n");
 
 	return 0;
+
+err_fail_reg_ib_client:
+	pr_err("Fail to register IB client\n");
+	destroy_workqueue(wq);
+
+	return -ENODEV;
 }
 
 static void exit_pingpong(void)
@@ -688,6 +712,8 @@ static void exit_pingpong(void)
 	ib_unregister_client(&client);
 
 	clean_comm_array();
+
+	destroy_workqueue(wq);
 
 	pr_info("Pingpong driver unloaded\n");
 }
