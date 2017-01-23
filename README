@@ -1,0 +1,23 @@
+Kernel IB Pinpong test
+	This project is a kernel module implementation of IP pingpong test.
+	The purpose of this module is to execute RDMA and send/recv verbs
+	between two peers.
+
+Prerequisites
+	Install kernel-devel package
+
+Installing
+	Download source and run make (make modules_install was not tested)
+
+Running
+	Load the module with two module params.
+	dev_idx: Index of IB device to use
+	cycles: Number of desired execution cycles
+
+	Check output with dmesg
+
+Author
+	Yuval Shaia <yuval.shaia@oracle.com>
+
+License
+	See license file
