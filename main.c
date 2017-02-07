@@ -11,20 +11,6 @@ MODULE_DESCRIPTION(DRIVER_DESC);
 
 #define MAX_DEVS 16
 
-int qp_type = IB_QPT_RC;
-module_param_named(qp_type, qp_type, int, 0444);
-MODULE_PARM_DESC(qp_type, "QP Type");
-int dev_idx = -1;
-module_param_named(dev_idx, dev_idx, int, 0444);
-MODULE_PARM_DESC(dev_idx, "Index of device to use for test");
-unsigned long cycles = 0;
-module_param_named(cycles, cycles, ulong, 0444);
-MODULE_PARM_DESC(cycles, "Number of cycles to run");
-unsigned long sends_counter = 1;
-
-static struct workqueue_struct *wq;
-static void comp_processor(struct work_struct *work);
-
 struct comm {
 	struct ib_device *dev;
 	struct ib_pd *pd;
@@ -39,6 +25,7 @@ struct comm {
 	u64 send_buf_dma_addr;
 	char *recv_buf;
 	u64 recv_buf_dma_addr;
+	struct ib_ah *vah;
 };
 
 struct comp_work {
@@ -46,6 +33,20 @@ struct comp_work {
 	struct comm *comm;
 	struct ib_cq *cq;
 };
+
+int qp_type = IB_QPT_RC;
+module_param_named(qp_type, qp_type, int, 0444);
+MODULE_PARM_DESC(qp_type, "QP Type");
+int dev_idx = -1;
+module_param_named(dev_idx, dev_idx, int, 0444);
+MODULE_PARM_DESC(dev_idx, "Index of device to use for test");
+unsigned long cycles = 0;
+module_param_named(cycles, cycles, ulong, 0444);
+MODULE_PARM_DESC(cycles, "Number of cycles to run");
+unsigned long sends_counter = 1;
+
+static struct workqueue_struct *wq;
+static void comp_processor(struct work_struct *work);
 
 int comm_idx = -1;
 struct comm comm_array[MAX_DEVS];
@@ -87,9 +88,15 @@ static int init_qp_state(struct ib_qp *qp, bool rts, int port, u16 dlid,
 	qp_attr.pkey_index = 0;
 	qp_attr_mask |= IB_QP_PORT;
 	qp_attr.port_num = port;
-	qp_attr_mask |= IB_QP_ACCESS_FLAGS;
-	qp_attr.qp_access_flags = IB_ACCESS_REMOTE_WRITE |
-				  IB_ACCESS_REMOTE_READ;
+	if (qp_type == IB_QPT_RC) {
+		qp_attr_mask |= IB_QP_ACCESS_FLAGS;
+		qp_attr.qp_access_flags = IB_ACCESS_REMOTE_WRITE |
+  					  IB_ACCESS_REMOTE_READ;
+	}
+	if (qp_type == IB_QPT_UD) {
+		qp_attr_mask |= IB_QP_QKEY;
+		qp_attr.qkey = 0;
+	}
 	rc = ib_modify_qp(qp, &qp_attr, qp_attr_mask);
 	if (rc)
 		goto err;
@@ -98,23 +105,25 @@ static int init_qp_state(struct ib_qp *qp, bool rts, int port, u16 dlid,
 	qp_attr_mask = 0;
 	qp_attr_mask |= IB_QP_STATE;
 	qp_attr.qp_state = IB_QPS_RTR;
-	qp_attr_mask |= IB_QP_AV;
-	qp_attr.ah_attr.port_num = port;
-	qp_attr.ah_attr.sl = 0;
-	qp_attr.ah_attr.ah_flags = 0;
-	qp_attr.ah_attr.dlid = dlid;
-	qp_attr.ah_attr.static_rate = 2;
-	qp_attr.ah_attr.src_path_bits = 0;
-	qp_attr_mask |= IB_QP_PATH_MTU;
-	qp_attr.path_mtu = IB_MTU_256;
-	qp_attr_mask |= IB_QP_RQ_PSN;
-	qp_attr.rq_psn = psn;
-	qp_attr_mask |= IB_QP_MAX_DEST_RD_ATOMIC;
-	qp_attr.max_dest_rd_atomic = 1;
-	qp_attr_mask |= IB_QP_DEST_QPN;
-	qp_attr.dest_qp_num = dqpn;
-	qp_attr_mask |= IB_QP_MIN_RNR_TIMER;
-	qp_attr.min_rnr_timer = 0;
+	if (qp_type == IB_QPT_RC) {
+		qp_attr_mask |= IB_QP_AV;
+		qp_attr.ah_attr.port_num = port;
+		qp_attr.ah_attr.sl = 0;
+		qp_attr.ah_attr.ah_flags = 0;
+		qp_attr.ah_attr.dlid = dlid;
+		qp_attr.ah_attr.static_rate = 2;
+		qp_attr.ah_attr.src_path_bits = 0;
+		qp_attr_mask |= IB_QP_PATH_MTU;
+		qp_attr.path_mtu = IB_MTU_256;
+		qp_attr_mask |= IB_QP_RQ_PSN;
+		qp_attr.rq_psn = psn;
+		qp_attr_mask |= IB_QP_MAX_DEST_RD_ATOMIC;
+		qp_attr.max_dest_rd_atomic = 1;
+		qp_attr_mask |= IB_QP_DEST_QPN;
+		qp_attr.dest_qp_num = dqpn;
+		qp_attr_mask |= IB_QP_MIN_RNR_TIMER;
+		qp_attr.min_rnr_timer = 0;
+	}
 	rc = ib_modify_qp(qp, &qp_attr, qp_attr_mask);
 	if (rc)
 		goto err;
@@ -123,17 +132,19 @@ static int init_qp_state(struct ib_qp *qp, bool rts, int port, u16 dlid,
 	if (rts) {
 		qp_attr_mask = 0;
 		qp_attr_mask |= IB_QP_STATE;
-		qp_attr.qp_state = IB_QPS_RTS;
 		qp_attr_mask |= IB_QP_SQ_PSN;
 		qp_attr.sq_psn = psn;
-		qp_attr_mask |= IB_QP_TIMEOUT;
-		qp_attr.timeout = 0x4;
-		qp_attr_mask |= IB_QP_RETRY_CNT;
-		qp_attr.retry_cnt = 0;
-		qp_attr_mask |= IB_QP_RNR_RETRY;
-		qp_attr.rnr_retry = 0;
-		qp_attr_mask |= IB_QP_MAX_QP_RD_ATOMIC;
-		qp_attr.max_rd_atomic = 1;
+		qp_attr.qp_state = IB_QPS_RTS;
+		if (qp_type == IB_QPT_RC) {
+			qp_attr_mask |= IB_QP_TIMEOUT;
+			qp_attr.timeout = 0x4;
+			qp_attr_mask |= IB_QP_RETRY_CNT;
+			qp_attr.retry_cnt = 0;
+			qp_attr_mask |= IB_QP_RNR_RETRY;
+			qp_attr.rnr_retry = 0;
+			qp_attr_mask |= IB_QP_MAX_QP_RD_ATOMIC;
+			qp_attr.max_rd_atomic = 1;
+		}
 		rc = ib_modify_qp(qp, &qp_attr, qp_attr_mask);
 		if (rc)
 			goto err;
@@ -174,6 +185,11 @@ static void post_send(struct comm *comm)
 	sge.length = comm->buf_sz;
 	sge.lkey = comm->mr->lkey;
 
+	rc = ib_req_notify_cq(comm->qp->send_cq, IB_CQ_NEXT_COMP);
+	if (rc < 0)
+		pr_err("ib_req_notify_cq returned %d\n", rc);
+
+	memset(&wr, 0, sizeof(wr));
 	wr.next = NULL;
 	wr.wr_id = (unsigned long)comm->send_buf;
 	pr_info("send.wr_id=%lld\n", wr.wr_id);
@@ -182,11 +198,16 @@ static void post_send(struct comm *comm)
 	wr.sg_list = &sge;
 	wr.num_sge = 1;
 
-	rc = ib_req_notify_cq(comm->qp->send_cq, IB_CQ_NEXT_COMP);
-	if (rc < 0)
-		pr_err("ib_req_notify_cq returned %d\n", rc);
-
-	rc = ib_post_send(comm->qp, &wr, &bad_wr);
+	if (qp_type == IB_QPT_RC)
+		rc = ib_post_send(comm->qp, &wr, &bad_wr);
+	if (qp_type == IB_QPT_UD) {
+		struct ib_ud_wr ud_wr = {0};
+		memcpy(&ud_wr.wr, &wr, sizeof(wr));
+		ud_wr.remote_qpn = comm->dqpn;
+		pr_err("remote_qpn=%d\n", ud_wr.remote_qpn);
+		ud_wr.ah = comm->vah;
+		rc = ib_post_send(comm->qp, &ud_wr.wr, &bad_wr);
+	}
 	if (rc) {
 		pr_err("ib_post_send returned %d\n", rc);
 		goto out_dma_unmap;
@@ -511,9 +532,10 @@ void comp_handler(struct ib_cq *cq, void *cq_context)
 static void add_one(struct ib_device *device)
 {
 	struct ib_cq *scq = 0, *rcq = 0;
-	struct ib_qp_init_attr qp_init_attr;
+	struct ib_qp_init_attr qp_init_attr = {0};
 	struct comm *comm;
-	struct ib_cq_init_attr cq_attr;
+	struct ib_cq_init_attr cq_attr = {0};
+	struct ib_ah_attr av_attr = {0};
 
 	pr_info("Pingpong.add_one: %s\n", device->name);
 
@@ -529,18 +551,29 @@ static void add_one(struct ib_device *device)
 	if (!comm->pd)
 		return;
 
+	/* AH */
+	if (qp_type == IB_QPT_UD) {
+		av_attr.ah_flags |= IB_AH_GRH;
+		av_attr.dlid = comm->dlid;
+		av_attr.grh.dgid.global.interface_id = 0x1234567890123456;
+		av_attr.port_num = comm->sport;
+		comm->vah = ib_create_ah(comm->pd, &av_attr);
+		if (IS_ERR(comm->vah)) {
+			pr_err("Fail to create AH\n");
+			goto free_pd;
+		}
+	}
+
 	/* CQs */
-	memset(&cq_attr, 0, sizeof(struct ib_cq_init_attr));
 	cq_attr.cqe = 4;
 	scq = ib_create_cq(device, comp_handler, NULL, comm, &cq_attr);
 	rcq = ib_create_cq(device, comp_handler, NULL, comm, &cq_attr);
 	if (!scq || !rcq) {
 		pr_err("Fail to create CQ\n");
-		goto free_pd;
+		goto free_ah;
 	}
 
 	/* QP */
-	memset(&qp_init_attr, 0, sizeof(struct ib_qp_init_attr));
 	qp_init_attr.send_cq = scq;
 	qp_init_attr.recv_cq = rcq;
 	qp_init_attr.cap.max_send_wr = 4;
@@ -599,6 +632,10 @@ free_cq:
 		ib_destroy_cq(rcq);
 	if (scq)
 		ib_destroy_cq(scq);
+
+free_ah:
+	if (qp_type == IB_QPT_UD)
+		ib_destroy_ah(comm->vah);
 
 free_pd:
 	ib_dealloc_pd(comm->pd);
