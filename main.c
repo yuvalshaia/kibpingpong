@@ -201,7 +201,7 @@ static void post_send(struct comm *comm)
 	if (qp_type == IB_QPT_RC)
 		rc = ib_post_send(comm->qp, &wr, &bad_wr);
 	if (qp_type == IB_QPT_UD) {
-		struct ib_ud_wr ud_wr = {0};
+		struct ib_ud_wr ud_wr;
 		memcpy(&ud_wr.wr, &wr, sizeof(wr));
 		ud_wr.remote_qpn = comm->dqpn;
 		pr_err("remote_qpn=%d\n", ud_wr.remote_qpn);
@@ -535,7 +535,7 @@ static void add_one(struct ib_device *device)
 	struct ib_qp_init_attr qp_init_attr = {0};
 	struct comm *comm;
 	struct ib_cq_init_attr cq_attr = {0};
-	struct ib_ah_attr av_attr = {0};
+	struct ib_ah_attr av_attr;
 
 	pr_info("Pingpong.add_one: %s\n", device->name);
 
