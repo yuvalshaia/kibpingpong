@@ -544,7 +544,7 @@ static void add_one(struct ib_device *device)
 
 	memset(comm, 0, sizeof(struct comm));
 
-	comm->buf_sz = 1024;
+	comm->buf_sz = 4096;
 
 	/* PD */
 	comm->pd = ib_alloc_pd(device);
