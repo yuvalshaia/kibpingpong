@@ -505,8 +505,12 @@ static void comp_processor(struct work_struct *work)
 	ib_poll_cq(cq, 1, &wc);
 	pr_info("wc.status=%d\n", wc.status);
 	pr_info("wc.wr_id=%lld\n", wc.wr_id);
-	if (wc.status != IB_WC_SUCCESS)
+
+	if (wc.status != IB_WC_SUCCESS) {
 		pr_err("wc.vendor_err=0x%x\n", wc.vendor_err);
+		goto out;
+	}
+
 	if (cq == cwork->comm->qp->recv_cq) {
 		payload = (char *)wc.wr_id;
 		pr_info("payload=%s\n", payload);
@@ -515,6 +519,7 @@ static void comp_processor(struct work_struct *work)
 		post_send(comm);
 	}
 
+out:
 	kfree(work);
 }
 
