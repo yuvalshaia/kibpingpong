@@ -43,6 +43,13 @@ MODULE_PARM_DESC(dev_idx, "Index of device to use for test");
 unsigned long cycles = 0;
 module_param_named(cycles, cycles, ulong, 0444);
 MODULE_PARM_DESC(cycles, "Number of cycles to run");
+int sender = 1;
+module_param_named(sender, sender, int, 0444);
+MODULE_PARM_DESC(sender, "Sender");
+int receiver = 1;
+module_param_named(receiver, receiver, int, 0444);
+MODULE_PARM_DESC(receiver, "Sender");
+
 unsigned long sends_counter = 1;
 
 static struct workqueue_struct *wq;
@@ -620,8 +627,10 @@ static void add_one(struct ib_device *device)
 	if (comm_idx == dev_idx) {
 		char buf[16];
 		snprintf(buf, sizeof(buf), "%ld", cycles);
-		recv(device->dma_device, NULL, "1", 1);
-		send(device->dma_device, NULL, buf, 1);
+		if (sender)
+			send(device->dma_device, NULL, buf, 1);
+		if (receiver)
+			recv(device->dma_device, NULL, "1", 1);
 	}
 
 	return;
