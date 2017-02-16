@@ -178,6 +178,14 @@ static void post_send(struct comm *comm)
 		return;
 	pr_info("Sending %ld/%ld\n", sends_counter, cycles);
 
+	if (comm->send_buf) {
+		ib_dma_unmap_single(comm->dev, comm->send_buf_dma_addr,
+				    comm->buf_sz, DMA_TO_DEVICE);
+
+		kfree(comm->send_buf);
+		comm->send_buf = NULL;
+	}
+
 	comm->send_buf = kzalloc(comm->buf_sz, GFP_KERNEL);
 	sprintf(comm->send_buf, "%ld", sends_counter);
 
@@ -240,6 +248,7 @@ static void post_recv(struct comm *comm)
 		ib_dma_unmap_single(comm->dev, comm->recv_buf_dma_addr,
 				    comm->buf_sz, DMA_TO_DEVICE);
 		kfree(comm->recv_buf);
+		comm->recv_buf = NULL;
 	}
 
 	comm->recv_buf = (char *)kzalloc(comm->buf_sz, GFP_KERNEL);
