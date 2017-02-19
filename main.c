@@ -17,7 +17,7 @@ struct comm {
 	struct ib_qp *qp;
 	bool qp_initialized;
 	u8 sport;
-	u64 dlid;
+	union ib_gid dgid;
 	u32 dqpn;
 	struct ib_mr *mr;
 	int buf_sz;
@@ -69,8 +69,8 @@ static struct comm *find_comm_obj(struct device *d)
 	return NULL;
 }
 
-static int init_qp_state(struct ib_qp *qp, bool rts, int port, u16 dlid,
-			 u32 dqpn)
+static int init_qp_state(struct ib_qp *qp, bool rts, int port,
+			 union ib_gid dgid, u32 dqpn)
 {
 	int qp_attr_mask = 0;
 	struct ib_qp_attr qp_attr;
@@ -117,7 +117,7 @@ static int init_qp_state(struct ib_qp *qp, bool rts, int port, u16 dlid,
 		qp_attr.ah_attr.port_num = port;
 		qp_attr.ah_attr.sl = 0;
 		qp_attr.ah_attr.ah_flags = 0;
-		qp_attr.ah_attr.dlid = dlid;
+		qp_attr.ah_attr.grh.dgid = dgid;
 		qp_attr.ah_attr.static_rate = 2;
 		qp_attr.ah_attr.src_path_bits = 0;
 		qp_attr_mask |= IB_QP_PATH_MTU;
@@ -339,7 +339,7 @@ static ssize_t store_sport(struct device *d, struct device_attribute *attr,
 
 static DEVICE_ATTR(sport, S_IWUSR | S_IRUGO, show_sport, store_sport);
 
-static ssize_t show_dlid(struct device *d, struct device_attribute *attr,
+static ssize_t show_dgid(struct device *d, struct device_attribute *attr,
 			 char *buf)
 {
 	struct comm *comm = find_comm_obj(d);
@@ -347,24 +347,29 @@ static ssize_t show_dlid(struct device *d, struct device_attribute *attr,
 	if (!comm)
 		return 0;
 
-	return sprintf(buf, "%ld\n", (long)comm->dlid);
+	return sprintf(buf, "0x%llx 0x%llx\n", comm->dgid.global.interface_id,
+		       comm->dgid.global.subnet_prefix);
 }
-static ssize_t store_dlid(struct device *d, struct device_attribute *attr,
+static ssize_t store_dgid(struct device *d, struct device_attribute *attr,
 			  const char *buf, size_t count)
 {
 	struct comm *comm = find_comm_obj(d);
+	int rc;
 
 	if (!comm)
 		return 0;
 
-	if (kstrtol(buf, 0, (long *)&comm->dlid))
-		pr_warn("Invalid format for dlid (%s)\n", buf);
+	rc = sscanf(buf, "0x%llx 0x%llx\n", &comm->dgid.global.interface_id,
+		    &comm->dgid.global.subnet_prefix);
+	if (rc != 2)
+		pr_warn("Invalid format for dgid (%s)\n", buf);
 
 	comm->qp_initialized = false;
+
 	return count;
 }
 
-static DEVICE_ATTR(dlid, S_IWUSR | S_IRUGO, show_dlid, store_dlid);
+static DEVICE_ATTR(dgid, S_IWUSR | S_IRUGO, show_dgid, store_dgid);
 
 static ssize_t show_dqpn(struct device *d, struct device_attribute *attr,
 			 char *buf)
@@ -393,24 +398,28 @@ static ssize_t store_dqpn(struct device *d, struct device_attribute *attr,
 
 static DEVICE_ATTR(dqpn, S_IWUSR | S_IRUGO, show_dqpn, store_dqpn);
 
-static int verify_comm_param(struct comm *comm)
+static int init_communication_attrs(struct comm *comm)
 {
-	struct ib_port_attr port_attr;
 	int rc;
+	struct ib_gid_attr attr;
 
-	/* Do local test if dlid was not specified */
-	if (!comm->sport)
+	/* Do local test if sport was not specified */
+	if (!comm->sport) {
 		comm->sport = 1;
 
-	if (!comm->dlid) {
-		rc = ib_query_port(comm->dev, comm->sport, &port_attr);
+		memset(&attr, 0, sizeof(attr));
+		rc = ib_query_gid(comm->dev, comm->sport, 0, &comm->dgid,
+				  &attr);
 		if (rc) {
-			pr_err("Fail to query port %d (err=%d)\n",
+			pr_err("Fail to query gid %d (err=%d)\n",
 			       comm->sport, rc);
 			return rc;
 		}
-		comm->dlid = port_attr.lid;
 	}
+
+	pr_info("sport=%d\n", comm->sport);
+	pr_info("dgid=0x%llx,0x%llx\n", comm->dgid.global.interface_id,
+		comm->dgid.global.subnet_prefix);
 
 	return 0;
 }
@@ -424,14 +433,14 @@ static ssize_t send(struct device *d, struct device_attribute *attr,
 	if (!comm)
 		return 0;
 
-	rc = verify_comm_param(comm);
+	rc = init_communication_attrs(comm);
 	if (rc) {
-		pr_err("Fail to set communicatin parameters\n");
+		pr_err("Fail to set communication parameters\n");
 		return rc;
 	}
 
 	if (!comm->qp_initialized) {
-		rc = init_qp_state(comm->qp, true, comm->sport, comm->dlid,
+		rc = init_qp_state(comm->qp, true, comm->sport, comm->dgid,
 				   comm->dqpn);
 		if (rc) {
 			pr_err("Fail to change QP state to send\n");
@@ -485,14 +494,14 @@ static ssize_t recv(struct device *d, struct device_attribute *attr,
 	if (!comm)
 		return 0;
 
-	rc = verify_comm_param(comm);
+	rc = init_communication_attrs(comm);
 	if (rc) {
 		pr_err("Fail to set communication parameters\n");
 		return rc;
 	}
 
 	if (!comm->qp_initialized) {
-		rc = init_qp_state(comm->qp, true, comm->sport, comm->dlid,
+		rc = init_qp_state(comm->qp, true, comm->sport, comm->dgid,
 				   comm->dqpn);
 		if (rc) {
 			pr_err("Fail to change QP state to recv\n");
@@ -565,7 +574,13 @@ static void add_one(struct ib_device *device)
 
 	memset(comm, 0, sizeof(struct comm));
 
+	comm->dev = device;
 	comm->buf_sz = 4096;
+
+	if (init_communication_attrs(comm)) {
+		pr_err("Fail to set communication parameters\n");
+		return;
+	}
 
 	/* PD */
 	comm->pd = ib_alloc_pd(device);
@@ -575,8 +590,7 @@ static void add_one(struct ib_device *device)
 	/* AH */
 	if (qp_type == IB_QPT_UD) {
 		av_attr.ah_flags |= IB_AH_GRH;
-		av_attr.dlid = comm->dlid;
-		av_attr.grh.dgid.global.interface_id = 0x1234567890123456;
+		av_attr.grh.dgid = comm->dgid;
 		av_attr.port_num = comm->sport;
 		comm->vah = ib_create_ah(comm->pd, &av_attr);
 		if (IS_ERR(comm->vah)) {
@@ -622,15 +636,13 @@ static void add_one(struct ib_device *device)
 
 	if (device_create_file(device->dma_device, &dev_attr_sport) ||
 	    device_create_file(device->dma_device, &dev_attr_buf_sz) ||
-	    device_create_file(device->dma_device, &dev_attr_dlid) ||
+	    device_create_file(device->dma_device, &dev_attr_dgid) ||
 	    device_create_file(device->dma_device, &dev_attr_dqpn) ||
 	    device_create_file(device->dma_device, &dev_attr_send) ||
 	    device_create_file(device->dma_device, &dev_attr_recv)) {
 		pr_err("Fail to create sysfs\n");
 		goto free_mr;
 	}
-
-	comm->dev = device;
 
 	/* Should we run the test automatically? */
 	if (comm_idx == dev_idx) {
@@ -694,7 +706,7 @@ static void clean_sysfs(struct comm *comm)
 
 	device_remove_file(comm->dev->dma_device, &dev_attr_sport);
 	device_remove_file(comm->dev->dma_device, &dev_attr_buf_sz);
-	device_remove_file(comm->dev->dma_device, &dev_attr_dlid);
+	device_remove_file(comm->dev->dma_device, &dev_attr_dgid);
 	device_remove_file(comm->dev->dma_device, &dev_attr_dqpn);
 	device_remove_file(comm->dev->dma_device, &dev_attr_send);
 	device_remove_file(comm->dev->dma_device, &dev_attr_recv);
