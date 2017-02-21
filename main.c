@@ -636,10 +636,10 @@ static void add_one(struct ib_device *device)
 	if (comm_idx == dev_idx) {
 		char buf[16];
 		snprintf(buf, sizeof(buf), "%ld", cycles);
-		if (sender)
-			send(device->dma_device, NULL, buf, 1);
 		if (receiver)
 			recv(device->dma_device, NULL, "1", 1);
+		if (sender)
+			send(device->dma_device, NULL, buf, 1);
 	}
 
 	return;
