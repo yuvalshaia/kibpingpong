@@ -347,22 +347,26 @@ static ssize_t show_dgid(struct device *d, struct device_attribute *attr,
 	if (!comm)
 		return 0;
 
-	return sprintf(buf, "0x%llx 0x%llx\n", comm->dgid.global.interface_id,
-		       comm->dgid.global.subnet_prefix);
+	return sprintf(buf, "%llx:%llx\n",
+		       be64_to_cpu(comm->dgid.global.subnet_prefix),
+		       be64_to_cpu(comm->dgid.global.interface_id));
 }
 static ssize_t store_dgid(struct device *d, struct device_attribute *attr,
 			  const char *buf, size_t count)
 {
 	struct comm *comm = find_comm_obj(d);
 	int rc;
+	u64 subnet_prefix, interface_id;
 
 	if (!comm)
 		return 0;
 
-	rc = sscanf(buf, "0x%llx 0x%llx\n", &comm->dgid.global.interface_id,
-		    &comm->dgid.global.subnet_prefix);
+	rc = sscanf(buf, "%llx:%llx\n", &subnet_prefix, &interface_id);
 	if (rc != 2)
 		pr_warn("Invalid format for dgid (%s)\n", buf);
+
+	comm->dgid.global.subnet_prefix = cpu_to_be64(subnet_prefix);
+	comm->dgid.global.interface_id = cpu_to_be64(interface_id);
 
 	comm->qp_initialized = false;
 
@@ -418,8 +422,9 @@ static int init_communication_attrs(struct comm *comm)
 	}
 
 	pr_info("sport=%d\n", comm->sport);
-	pr_info("dgid=0x%llx,0x%llx\n", comm->dgid.global.interface_id,
-		comm->dgid.global.subnet_prefix);
+	pr_info("dgid=0x%llx,0x%llx\n",
+		be64_to_cpu(comm->dgid.global.interface_id),
+		be64_to_cpu(comm->dgid.global.subnet_prefix));
 
 	return 0;
 }
