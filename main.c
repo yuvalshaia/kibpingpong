@@ -48,7 +48,13 @@ module_param_named(sender, sender, int, 0444);
 MODULE_PARM_DESC(sender, "Sender");
 int receiver = 1;
 module_param_named(receiver, receiver, int, 0444);
-MODULE_PARM_DESC(receiver, "Sender");
+MODULE_PARM_DESC(receiver, "Receiver");
+ulong dguid = 0;
+module_param_named(dguid, dguid, ulong, 0444);
+MODULE_PARM_DESC(dguid, "Target GUID");
+int dqpn = 0;
+module_param_named(dqpn, dqpn, int, 0444);
+MODULE_PARM_DESC(dqpn, "Target QPN");
 
 unsigned long sends_counter = 1;
 
@@ -262,6 +268,7 @@ static void post_recv(struct comm *comm)
 		kfree(comm->recv_buf);
 		comm->recv_buf = NULL;
 	}
+
 	sge.addr = comm->recv_buf_dma_addr;
 	sge.length = comm->buf_sz;
 	sge.lkey = comm->mr->lkey;
@@ -405,20 +412,25 @@ static DEVICE_ATTR(dqpn, S_IWUSR | S_IRUGO, show_dqpn, store_dqpn);
 static int init_communication_attrs(struct comm *comm)
 {
 	int rc;
-	struct ib_gid_attr attr;
+	struct ib_gid_attr attr = {0};
 
 	/* Do local test if sport was not specified */
-	if (!comm->sport) {
+	if (!comm->sport)
 		comm->sport = 1;
 
-		memset(&attr, 0, sizeof(attr));
+	if (!comm->dgid.global.interface_id) {
 		rc = ib_query_gid(comm->dev, comm->sport, 0, &comm->dgid,
 				  &attr);
-		if (rc) {
-			pr_err("Fail to query gid %d (err=%d)\n",
-			       comm->sport, rc);
-			return rc;
-		}
+	} else {
+		/* Just to fetch subnet prefix */
+		union ib_gid dgid;
+		rc = ib_query_gid(comm->dev, comm->sport, 0, &dgid, &attr);
+		comm->dgid.global.subnet_prefix = dgid.global.subnet_prefix;
+	}
+	if (rc) {
+		pr_err("Fail to query gid %d (err=%d)\n",
+		       comm->sport, rc);
+		return rc;
 	}
 
 	pr_info("sport=%d\n", comm->sport);
@@ -588,6 +600,8 @@ static void add_one(struct ib_device *device)
 
 	comm->dev = device;
 	comm->buf_sz = 4096;
+	comm->dgid.global.interface_id = cpu_to_be64(dguid);
+	comm->dqpn = dqpn;
 
 	if (init_communication_attrs(comm)) {
 		pr_err("Fail to set communication parameters\n");
@@ -635,9 +649,12 @@ static void add_one(struct ib_device *device)
 		pr_err("Fail to create QP\n");
 		goto free_cq;
 	}
-	pr_info("QPN=%d\n", comm->qp->qp_num);
-	/* Just shortcut for local loop test */
-	comm->dqpn = comm->qp->qp_num;
+
+	if (!comm->dqpn) {
+		pr_info("QPN=%d\n", comm->qp->qp_num);
+		/* Just shortcut for local loop test */
+		comm->dqpn = comm->qp->qp_num;
+	}
 
 	/* MR */
 	comm->mr = ib_get_dma_mr(comm->pd, IB_ACCESS_LOCAL_WRITE);
