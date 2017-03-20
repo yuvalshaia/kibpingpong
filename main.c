@@ -552,7 +552,6 @@ static void comp_processor(struct work_struct *work)
 		pr_err("wc.vendor_err=0x%x\n", wc.vendor_err);
 		if ((wc.status == IB_WC_REM_OP_ERR) &&
 		    (wc.vendor_err == 0x102)) {
-			post_recv(comm);
 			pr_err("post_recv done\n");
 			mdelay(1000);
 		} else {
