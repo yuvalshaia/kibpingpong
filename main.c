@@ -367,27 +367,32 @@ static void free_buffers(void)
 static int alloc_buffers(void)
 {
 	int i;
-	send_buf = kmalloc(buf_sz, GFP_KERNEL);
-	if (!send_buf)
-		goto out_err;
 
-	send_buf_dma_addr = ib_dma_map_single(dev, send_buf, buf_sz,
-					      DMA_FROM_DEVICE);
-	if (ib_dma_mapping_error(dev, send_buf_dma_addr))
-		goto out_err;
-
-	for (i = 0; i < MAX_BUFS; i++) {
-		recv_buf[i] = kmalloc(buf_sz, GFP_KERNEL);
-		if (!recv_buf[i])
+	if (sender) {
+		send_buf = kmalloc(buf_sz, GFP_KERNEL);
+		if (!send_buf)
 			goto out_err;
 
-		recv_buf_dma_addr[i] = ib_dma_map_single(dev,
-							 recv_buf[i], buf_sz,
-							 DMA_FROM_DEVICE);
-		if (ib_dma_mapping_error(dev, recv_buf_dma_addr[i]))
+		send_buf_dma_addr = ib_dma_map_single(dev, send_buf, buf_sz,
+						      DMA_FROM_DEVICE);
+		if (ib_dma_mapping_error(dev, send_buf_dma_addr))
 			goto out_err;
+	}
 
-		sprintf(recv_buf[i], "INIT_DATA_%d", i);
+	if (receiver) {
+		for (i = 0; i < MAX_BUFS; i++) {
+			recv_buf[i] = kmalloc(buf_sz, GFP_KERNEL);
+			if (!recv_buf[i])
+				goto out_err;
+
+			recv_buf_dma_addr[i] =
+				ib_dma_map_single(dev, recv_buf[i], buf_sz,
+						  DMA_FROM_DEVICE);
+			if (ib_dma_mapping_error(dev, recv_buf_dma_addr[i]))
+				goto out_err;
+
+			sprintf(recv_buf[i], "INIT_DATA_%d", i);
+		}
 	}
 
 	return 0;
