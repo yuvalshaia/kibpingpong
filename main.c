@@ -9,9 +9,9 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);
 
-#define MAX_BUFS 2
+#define MAX_BUFS 10
 
-struct ib_device *dev = NULL;
+struct ib_device *dev;
 struct ib_pd *pd;
 struct ib_qp *qp;
 bool qp_initialized;
@@ -46,7 +46,7 @@ MODULE_PARM_DESC(receiver, "Receiver");
 ulong dguid = 0;
 module_param_named(dguid, dguid, ulong, 0444);
 MODULE_PARM_DESC(dguid, "Target GUID");
-int dqpn = 0;
+int dqpn = -1;
 module_param_named(dqpn, dqpn, int, 0444);
 MODULE_PARM_DESC(dqpn, "Target QPN");
 int buf_sz = 4096;
@@ -412,7 +412,7 @@ static void add_one(struct ib_device *device)
 	pr_info("Pingpong.add_one: %s\n", device->name);
 
 	dev = device;
-	dgid.global.subnet_prefix = 0;
+	dgid.global.subnet_prefix = 0x80fe;
 	dgid.global.interface_id = cpu_to_be64(dguid);
 
 	if (init_communication_attrs()) {
@@ -467,7 +467,7 @@ static void add_one(struct ib_device *device)
 		goto free_cq;
 	}
 
-	if (!dqpn) {
+	if (dqpn == -1) {
 		pr_info("QPN=%d\n", qp->qp_num);
 		/* Just shortcut for local loop test */
 		dqpn = qp->qp_num;
@@ -523,10 +523,13 @@ static void clean_hw_resources(void)
 		ib_destroy_cq(qp->recv_cq);
 	if (pd)
 		ib_dealloc_pd(pd);
+
+	dev = NULL;
 }
 
 static void remove_one(struct ib_device *device, void *client_data)
 {
+	clean_hw_resources();
 	pr_info("Pingpong.remove_one: %s\n", device->name);
 }
 
@@ -540,6 +543,8 @@ static int init_pingpong(void)
 {
 	int rc;
 
+	dev = NULL;
+
 	wq = alloc_workqueue("pingpong_comp", 0, 0);
 	if (!wq) {
 		pr_err("Fail to create completion WQ\n");
@@ -549,8 +554,6 @@ static int init_pingpong(void)
 	rc = ib_register_client(&client);
 	if (rc)
 		goto err_fail_reg_ib_client;
-
-	dev = NULL;
 
 	pr_info("Pingpong driver loaded successfully\n");
 
@@ -566,8 +569,6 @@ err_fail_reg_ib_client:
 static void exit_pingpong(void)
 {
 	ib_unregister_client(&client);
-
-	clean_hw_resources();
 
 	destroy_workqueue(wq);
 
