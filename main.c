@@ -518,7 +518,7 @@ static ssize_t recv(struct device *d, struct device_attribute *attr,
 	}
 
 	if (!comm->qp_initialized) {
-		rc = init_qp_state(comm->qp, true, comm->sport, comm->dgid,
+		rc = init_qp_state(comm->qp, false, comm->sport, comm->dgid,
 				   comm->dqpn);
 		if (rc) {
 			pr_err("Fail to change QP state to recv\n");
