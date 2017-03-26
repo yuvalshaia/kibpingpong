@@ -25,7 +25,6 @@ struct ib_ah *vah;
 
 struct comp_work {
 	struct work_struct work;
-	struct ib_cq *cq;
 };
 
 int qp_type = IB_QPT_RC;
@@ -56,7 +55,8 @@ MODULE_PARM_DESC(buf_sz, "Buffer size");
 unsigned long sends_counter = 1;
 
 static struct workqueue_struct *wq;
-static void comp_processor(struct work_struct *work);
+static void tx_comp_processor(struct work_struct *work);
+static void rx_comp_processor(struct work_struct *work);
 
 static int init_qp_state(struct ib_qp *qp, bool rts, int port,
 			 union ib_gid dgid, u32 dqpn)
@@ -300,19 +300,19 @@ static void init_and_recv(struct device *d)
 		post_recv(i);
 }
 
-static void comp_processor(struct work_struct *work)
+static void rx_comp_processor(struct work_struct *work)
 {
 	struct ib_wc wc;
-	struct comp_work *cwork =  container_of(work, struct comp_work, work);
 
-	pr_info("%s completion\n", cwork->cq == qp->recv_cq ? "RX" : "TX");
+	pr_info("RX completion\n");
 
-	ib_poll_cq(cwork->cq, 1, &wc);
+	ib_poll_cq(qp->recv_cq, 1, &wc);
 	pr_info("wc.status=%d\n", wc.status);
 	pr_info("wc.wr_id=%lld\n", wc.wr_id);
 
 	if (wc.status != IB_WC_SUCCESS) {
 		pr_err("wc.vendor_err=0x%x\n", wc.vendor_err);
+		/*
 		if ((wc.status == IB_WC_REM_OP_ERR) &&
 		    (wc.vendor_err == 0x102)) {
 			pr_err("post_recv done\n");
@@ -320,27 +320,63 @@ static void comp_processor(struct work_struct *work)
 		} else {
 			goto out;
 		}
+		*/
+		goto out;
 	}
 
-	if (cwork->cq == qp->recv_cq) {
-		pr_info("payload=%s\n", recv_buf[wc.wr_id]);
-		post_recv(wc.wr_id);
-	} else {
-		post_send();
-	}
+	pr_info("payload=%s\n", recv_buf[wc.wr_id]);
+	post_recv(wc.wr_id);
 
 out:
 	kfree(work);
 }
 
-void comp_handler(struct ib_cq *cq, void *cq_context)
+void rx_comp_handler(struct ib_cq *cq, void *cq_context)
 {
-	struct comp_work *work = kmalloc(sizeof *work, GFP_ATOMIC);
+	struct work_struct *work = kmalloc(sizeof *work, GFP_ATOMIC);
 
-	INIT_WORK(&work->work, comp_processor);
-	work->cq = cq;
+	INIT_WORK(work, rx_comp_processor);
 
-	queue_work(wq, &work->work);
+	queue_work(wq, work);
+}
+
+static void tx_comp_processor(struct work_struct *work)
+{
+	struct ib_wc wc;
+
+	pr_info("TX completion\n");
+
+	ib_poll_cq(qp->send_cq, 1, &wc);
+	pr_info("wc.status=%d\n", wc.status);
+	pr_info("wc.wr_id=%lld\n", wc.wr_id);
+
+	if (wc.status != IB_WC_SUCCESS) {
+		pr_err("wc.vendor_err=0x%x\n", wc.vendor_err);
+		/*
+		if ((wc.status == IB_WC_REM_OP_ERR) &&
+		    (wc.vendor_err == 0x102)) {
+			pr_err("post_recv done\n");
+			mdelay(1000);
+		} else {
+			goto out;
+		}
+		*/
+		goto out;
+	}
+
+	post_send();
+
+out:
+	kfree(work);
+}
+
+void tx_comp_handler(struct ib_cq *cq, void *cq_context)
+{
+	struct work_struct *work = kmalloc(sizeof *work, GFP_ATOMIC);
+
+	INIT_WORK(work, tx_comp_processor);
+
+	queue_work(wq, work);
 }
 
 static void free_buffers(void)
@@ -449,8 +485,8 @@ static void add_one(struct ib_device *device)
 
 	/* CQs */
 	cq_attr.cqe = 4;
-	scq = ib_create_cq(device, comp_handler, NULL, NULL, &cq_attr);
-	rcq = ib_create_cq(device, comp_handler, NULL, NULL, &cq_attr);
+	scq = ib_create_cq(device, tx_comp_handler, NULL, NULL, &cq_attr);
+	rcq = ib_create_cq(device, rx_comp_handler, NULL, NULL, &cq_attr);
 	if (!scq || !rcq) {
 		pr_err("Fail to create CQ\n");
 		goto free_ah;
