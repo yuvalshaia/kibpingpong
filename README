@@ -10,9 +10,11 @@ Installing
 	Download source and run make (make modules_install was not tested)
 
 Running
-	Load the module with two module params.
-	dev_idx: Index of IB device to use
+	Load the module with the module params.
 	cycles: Number of desired execution cycles
+	server: Set to 1 to run as a sender-side
+	receiver: Set to 1 to run as a receiver-side
+	dguid: Peer's GUID
 
 	Check output with dmesg
 
