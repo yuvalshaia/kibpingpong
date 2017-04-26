@@ -468,8 +468,10 @@ static void add_one(struct ib_device *device)
 
 	/* PD */
 	pd = ib_alloc_pd(device);
-	if (!pd)
+	if (IS_ERR(pd)) {
+		pr_err("Fail to create PD\n");
 		goto free_bufs;
+	}
 
 	/* AH */
 	if (qp_type == IB_QPT_UD) {
@@ -487,7 +489,7 @@ static void add_one(struct ib_device *device)
 	cq_attr.cqe = 4;
 	scq = ib_create_cq(device, tx_comp_handler, NULL, NULL, &cq_attr);
 	rcq = ib_create_cq(device, rx_comp_handler, NULL, NULL, &cq_attr);
-	if (!scq || !rcq) {
+	if (!scq || !rcq || IS_ERR(scq) || IS_ERR(rcq)) {
 		pr_err("Fail to create CQ\n");
 		goto free_ah;
 	}
@@ -516,7 +518,7 @@ static void add_one(struct ib_device *device)
 
 	/* MR */
 	mr = ib_get_dma_mr(pd, IB_ACCESS_LOCAL_WRITE);
-	if (IS_ERR(mr)) {
+	if (!mr || IS_ERR(mr)) {
 		pr_err("Fail to create MR\n");
 		goto free_qp;
 	}
